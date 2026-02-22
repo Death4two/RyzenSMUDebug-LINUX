@@ -28,16 +28,20 @@ Thanks to the authors and contributors of the above projects.
 
 ## Prerequisites
 
-- **Kernel driver**: The `ryzen_smu` kernel module must be loaded.
-  ```bash
-  cd ../ryzen_smu
-  make
-  sudo insmod ryzen_smu.ko
-  ```
-  Or install via DKMS for persistence across reboots.
+**You must install and load the `ryzen_smu` kernel driver before this software will work.** This tool talks to the SMU only through that driver; without it, the program will fail (e.g. "SMU Driver Not Present" or similar).
 
-- **Build tools**: `gcc`, `make`
-- **Root access**: Required for driver communication
+1. **Install ryzen_smu**  
+   Clone and build the driver, then load the module:
+   ```bash
+   git clone https://github.com/amkillam/ryzen_smu.git
+   cd ryzen_smu
+   make
+   sudo insmod ryzen_smu.ko
+   ```
+   Or install via DKMS so the driver loads automatically after reboots.
+
+2. **Build tools**: `gcc`, `make`
+3. **Root access**: Required for driver communication (run `smu_debug_tool` with `sudo`).
 
 ## Building
 
