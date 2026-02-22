@@ -9,7 +9,7 @@ A Linux port of the Windows ZenStates SMU Debug Tool. Communicates with the AMD 
 **This tool is experimental and may cause system instability, data loss, or hardware damage.**
 
 - **Use at your own risk.** Low-level SMU and SMN access can misconfigure the CPU, motherboard, or firmware.
-- **Hardware risk:** Incorrect or unsupported commands may contribute to permanent damage or "bricking" of hardware. The authors are not responsible for any damage.
+- **Hardware risk:** Incorrect or unsupported commands may contribute to permanent damage or "bricking" of hardware.
 - **PBO / Curve Optimizer / FMax tuning** in this tool is developed and tested **only for Granite Ridge (Zen 5 desktop)**. Other platforms are unsupported for tuning; behavior may be wrong or dangerous.
 - Ensure you have backups and understand the risks before changing SMU settings.
 
