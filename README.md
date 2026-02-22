@@ -91,7 +91,7 @@ When built with GTK3, `smu_debug_tool --gui` opens a window with tabs:
 | **SMN** | Read/write SMN address (hex) |
 | **Log** | Status and error messages |
 
-**Curve Optimizer** (Granite Ridge): per-core offset -60 to +10, Set PSM command 0x6, Get PSM 0xD5; core mask encoding matches ZenStates. **FMax**: GetMaxFrequency (0x6E), SetOverclockFreqAllCores (0x5C).
+**Curve Optimizer** (Granite Ridge): per-core offset -60 to +10, Set PSM command 0x6, Get PSM 0xD5; core mask encoding matches ZenStates. **FMax** (boost limit): Get 0x6E; Set 0x70 (SetBoostLimitFrequencyAllCores) on Zen4/Zen5, 0x5C on Zen2/Zen3.
 
 ## CLI Features
 
@@ -141,7 +141,7 @@ Scan ranges are codename-dependent, matching the Windows tool exactly.
 
 ## Curve Optimizer and FMax (CLI and GUI)
 
-- **FMax:** Read with RSMU command `0x6E` (GetMaxFrequency), set with `0x5C` (SetOverclockFreqAllCores, frequency in MHz). Supported on Matisse/Vermeer and similar; other platforms may use different commands.
+- **FMax (boost limit):** Read with `0x6E` (GetBoostLimitFrequency). Set: `0x5C` on Zen2/Zen3, `0x70` (SetBoostLimitFrequencyAllCores) on Zen4/Zen5 (Raphael, Granite Ridge). Arg0 = frequency in MHz.
 - **Curve Optimizer:** Per-core margin is sent via RSMU command `0x76` (Set PSM margin) with Arg0 = core mask, Arg1 = signed margin. If your CPU does not respond to `0x76`, the feature may be unsupported or use a different command ID on your platform; use the SMU Command tab/page to experiment.
 
 ## Supported platforms

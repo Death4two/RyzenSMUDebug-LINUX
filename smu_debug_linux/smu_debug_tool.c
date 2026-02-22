@@ -73,9 +73,10 @@ typedef struct {
 static mailbox_match_t g_matches[MAX_MAILBOX_MATCHES];
 static int g_match_count = 0;
 
-/* RSMU command IDs (Matisse/Vermeer/Raphael - see rsmu_commands.md) */
-#define SMU_CMD_GET_MAX_FREQUENCY    0x6E
-#define SMU_CMD_SET_FMAX_ALL_CORES  0x5C
+/* RSMU command IDs (see rsmu_commands.md, ZenStates-Core). FMax UI = boost limit (get 0x6E, set below). */
+#define SMU_CMD_GET_MAX_FREQUENCY      0x6E  /* GetBoostLimitFrequency */
+#define SMU_CMD_SET_FMAX_ALL_CORES    0x5C  /* Zen2/Zen3: SetOverclockFreqAllCores (same as boost there) */
+#define SMU_CMD_SET_BOOST_LIMIT_ALL   0x70  /* Zen4/Zen5: SetBoostLimitFrequencyAllCores (FMax = boost limit) */
 /* Curve Optimizer / PSM margin. Zen2/Zen3 SET = 0x76 (args[0]=mask, args[1]=margin).
  * Zen4/Zen5 use SET 0x6 with single combined arg (mask|margin in low 16 bits). */
 #define SMU_CMD_SET_PSM_MARGIN       0x76  /* Zen2/Zen3 */
@@ -368,11 +369,29 @@ int smu_get_fmax(unsigned int *mhz_out) {
     return 0;
 }
 
+/* True if this codename uses Zen4/Zen5 boost-limit command 0x70 for FMax set (Raphael, Granite Ridge, etc.). */
+static int use_zen45_fmax_set(void) {
+    switch (obj.codename) {
+    case CODENAME_RAPHAEL:
+    case CODENAME_GRANITERIDGE:
+    case CODENAME_STORMPEAK:
+    case CODENAME_STRIXPOINT:
+    case CODENAME_STRIXHALO:
+    case CODENAME_HAWKPOINT:
+    case CODENAME_REMBRANDT:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 int smu_set_fmax(unsigned int mhz) {
     smu_arg_t args;
+    /* ZenStates SetFMax = SetBoostLimitAllCore: 0x70 on Zen4/Zen5, 0x5C on Zen2/Zen3. */
+    unsigned int cmd = use_zen45_fmax_set() ? SMU_CMD_SET_BOOST_LIMIT_ALL : SMU_CMD_SET_FMAX_ALL_CORES;
     memset(&args, 0, sizeof(args));
-    args.args[0] = mhz;
-    return smu_send_command(&obj, SMU_CMD_SET_FMAX_ALL_CORES, &args, SMU_TYPE_RSMU) == SMU_Return_OK ? 0 : -1;
+    args.args[0] = mhz & 0xFFFFFu;  /* 20-bit (ZenStates: frequency & 0xfffff) */
+    return smu_send_command(&obj, cmd, &args, SMU_TYPE_RSMU) == SMU_Return_OK ? 0 : -1;
 }
 
 /* True if this codename uses Zen4/Zen5 PSM format: SET 0x6 with single combined arg. */

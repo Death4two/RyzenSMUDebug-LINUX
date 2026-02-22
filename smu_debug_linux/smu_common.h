@@ -24,7 +24,7 @@ int smu_get_if_version_int(void);
 /* Encode core mask for Curve Optimizer (desktop: (ccd<<8|local_core)<<20; APU: core_index). */
 unsigned int smu_encode_core_mask(int core_index);
 
-/* FMax: GetMaxFrequency 0x6E, SetOverclockFreqAllCores 0x5C (frequency in MHz). */
+/* FMax (boost limit): Get 0x6E; Set: 0x5C (Zen2/Zen3), 0x70 SetBoostLimitFrequencyAllCores (Zen4/Zen5). Arg0 = MHz. */
 int smu_get_fmax(unsigned int *mhz_out);
 int smu_set_fmax(unsigned int mhz);
 
