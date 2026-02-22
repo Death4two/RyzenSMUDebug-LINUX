@@ -1,5 +1,5 @@
 CC      ?= gcc
-CFLAGS   = -Wall -Wextra -O2 -I. -I../ryzen_smu/lib
+CFLAGS   = -Wall -Wextra -O2 -I. -I./ryzen_smu_lib
 LDFLAGS  = -lpthread -lm
 
 # Optional GTK3 for GUI (smu_debug_tool --gui)
@@ -31,7 +31,7 @@ smu_debug_tool.o: smu_debug_tool.c smu_common.h
 smu_gui.o: smu_gui.c smu_common.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-libsmu.o: ../ryzen_smu/lib/libsmu.c
+libsmu.o: ryzen_smu_lib/libsmu.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
