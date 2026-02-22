@@ -1,3 +1,14 @@
+# Build artifacts (not needed to build or run)
+*.o
+*.ko
+*.mod
+*.mod.*
+*.cmd
+*.bin
+Module.symvers
+modules.order
+smu_debug_linux/smu_debug_tool
+
+# Reference / optional (not required by this software)
 SMUDebugTool/
-ryzen_smu/
 smu_debug_linux/ZenStates-Core/

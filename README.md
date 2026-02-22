@@ -19,7 +19,7 @@ A Linux port of the Windows ZenStates SMU Debug Tool. Communicates with the AMD 
 
 This project builds on and references the following:
 
-- **[ryzen_smu](https://github.com/leogx9r/ryzen_smu)** — Linux kernel driver and userspace library (`libsmu`) for AMD Ryzen SMU/SMN access. Used for all communication with the SMU (PM table, RSMU/MP1/HSMP commands, SMN read/write).  
+- **[ryzen_smu](https://github.com/amkillam/ryzen_smu)** — Linux kernel driver and userspace library (`libsmu`) for AMD Ryzen SMU/SMN access. Used for all communication with the SMU (PM table, RSMU/MP1/HSMP commands, SMN read/write).  
   - RSMU command reference: `ryzen_smu/docs/rsmu_commands.md`
 - **ZenStates-Core** — Source for RSMU command IDs and PSM/Curve Optimizer behavior per platform (e.g. `GetDldoPsmMargin` / `SetDldoPsmMargin`, Zen3/Zen4/Zen5 SMUSettings). Core mask encoding and GET/SET command IDs (e.g. 0xD5 for Granite Ridge) are derived from ZenStates-Core.
 - **SMUDebugTool (Windows)** — Windows reference implementation (ZenStates-based). Used for behavior parity: core mask encoding, PM table layout (index/offset/value), mailbox scan logic, and UI concepts for PBO/Curve Optimizer/FMax.
