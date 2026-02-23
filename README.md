@@ -2,7 +2,7 @@
 
 A Linux port of the Windows ZenStates SMU Debug Tool. Communicates with the AMD System Management Unit (SMU) through the `ryzen_smu` kernel driver via `libsmu`, providing access to PM tables, SMU commands, SMN address space, and memory timings.
 
-<img width="896" height="631" alt="smu" src="https://github.com/user-attachments/assets/a12d86ad-7d1d-49a7-970c-d1d2d371ae05" />
+<img width="1126" height="780" alt="smu" src="https://github.com/user-attachments/assets/78537836-54f8-4f7d-a1af-767814b7efb7" />
 
 ---
 
