@@ -30,6 +30,7 @@
 #include <termios.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <sys/select.h>
 
 #include <libsmu.h>
@@ -39,7 +40,6 @@
 /* ═══════════════════════════════════════════════════════════════════════════ */
 
 #define TOOL_VERSION            "1.0.0"
-#define PM_TABLE_MAX_BYTES      0x1AB0
 #define SMU_SCAN_RETRIES        8192
 
 /* Box-drawing characters for table output */
@@ -120,13 +120,16 @@ void smu_setup_signals(void)
 /*  Utility Functions                                                         */
 /* ═══════════════════════════════════════════════════════════════════════════ */
 
-static void append_u32_to_str(char *buf, unsigned int val)
+static void append_u32_to_str(char *buf, size_t bufsz, unsigned int val)
 {
-    char tmp[8];
-    snprintf(tmp, sizeof(tmp), "%c%c%c%c",
-             val & 0xff, (val >> 8) & 0xff,
-             (val >> 16) & 0xff, (val >> 24) & 0xff);
-    strcat(buf, tmp);
+    size_t cur = strlen(buf);
+    if (cur + 4 < bufsz) {
+        buf[cur]     = (char)(val & 0xff);
+        buf[cur + 1] = (char)((val >> 8) & 0xff);
+        buf[cur + 2] = (char)((val >> 16) & 0xff);
+        buf[cur + 3] = (char)((val >> 24) & 0xff);
+        buf[cur + 4] = '\0';
+    }
 }
 
 static const char *get_processor_name(void)
@@ -143,22 +146,22 @@ static const char *get_processor_name(void)
     memset(buffer, 0, sizeof(buffer));
 
     __get_cpuid(0x80000002, &eax, &ebx, &ecx, &edx);
-    append_u32_to_str(buffer, eax);
-    append_u32_to_str(buffer, ebx);
-    append_u32_to_str(buffer, ecx);
-    append_u32_to_str(buffer, edx);
+    append_u32_to_str(buffer, sizeof(buffer), eax);
+    append_u32_to_str(buffer, sizeof(buffer), ebx);
+    append_u32_to_str(buffer, sizeof(buffer), ecx);
+    append_u32_to_str(buffer, sizeof(buffer), edx);
 
     __get_cpuid(0x80000003, &eax, &ebx, &ecx, &edx);
-    append_u32_to_str(buffer, eax);
-    append_u32_to_str(buffer, ebx);
-    append_u32_to_str(buffer, ecx);
-    append_u32_to_str(buffer, edx);
+    append_u32_to_str(buffer, sizeof(buffer), eax);
+    append_u32_to_str(buffer, sizeof(buffer), ebx);
+    append_u32_to_str(buffer, sizeof(buffer), ecx);
+    append_u32_to_str(buffer, sizeof(buffer), edx);
 
     __get_cpuid(0x80000004, &eax, &ebx, &ecx, &edx);
-    append_u32_to_str(buffer, eax);
-    append_u32_to_str(buffer, ebx);
-    append_u32_to_str(buffer, ecx);
-    append_u32_to_str(buffer, edx);
+    append_u32_to_str(buffer, sizeof(buffer), eax);
+    append_u32_to_str(buffer, sizeof(buffer), ebx);
+    append_u32_to_str(buffer, sizeof(buffer), ecx);
+    append_u32_to_str(buffer, sizeof(buffer), edx);
 
     p = buffer;
     l = strlen(p);
@@ -334,21 +337,9 @@ int smu_get_topology(unsigned int *ccds, unsigned int *ccxs,
     return get_topology(ccds, ccxs, cores_per_ccx, phys_cores);
 }
 
-int smu_get_core_enabled(int core_index) {
-    unsigned int ccds, ccxs, cpc, phys;
-    unsigned int core_disable_map[2] = {0, 0};
-    if (get_topology_ex(&ccds, &ccxs, &cpc, &phys, core_disable_map) != 0)
-        return 1;
-    if (core_index < 0 || (unsigned)core_index >= phys)
-        return 0;
-    int map_index = core_index / 8;
-    int core_in_group = core_index % 8;
-    return (int)((~core_disable_map[map_index] >> core_in_group) & 1);
-}
-
 int smu_get_if_version_int(void) { return get_if_version_int(); }
 
-unsigned int smu_encode_core_mask(int core_index) {
+static unsigned int smu_encode_core_mask(int core_index) {
     /* APU: simple core index; Desktop: (ccd << 8 | local_core) << 20 */
     if (obj.codename == CODENAME_RENOIR || obj.codename == CODENAME_CEZANNE ||
         obj.codename == CODENAME_REMBRANDT || obj.codename == CODENAME_PHOENIX ||
@@ -620,6 +611,7 @@ static void send_smu_command_interactive(void)
     int mailbox_type;
     smu_arg_t args;
     smu_return_val ret;
+    enum smu_mailbox mb;
 
     printf("\n--- Send SMU Command ---\n");
     printf("  Mailbox: [1] RSMU  [2] MP1  [3] HSMP\n");
@@ -663,7 +655,6 @@ static void send_smu_command_interactive(void)
     if (buf[0])
         parse_hex(buf, &args.args[5]);
 
-    enum smu_mailbox mb;
     switch (mailbox_type) {
     case 1:  mb = SMU_TYPE_RSMU; break;
     case 2:  mb = SMU_TYPE_MP1;  break;
@@ -1563,39 +1554,153 @@ static void show_named_pm_summary(void)
 /*  Privilege Elevation                                                       */
 /* ═══════════════════════════════════════════════════════════════════════════ */
 
+/*
+ * Query a gsettings key, strip quotes/newline, return pointer to static buf.
+ * Returns NULL on failure or empty result.
+ */
+static const char *query_gsetting(const char *key, char *buf, size_t bufsz)
+{
+    char cmd[256];
+    char *p;
+    size_t tlen;
+    FILE *fp;
+
+    snprintf(cmd, sizeof(cmd),
+             "gsettings get org.gnome.desktop.interface %s 2>/dev/null", key);
+    fp = popen(cmd, "r");
+    if (!fp)
+        return NULL;
+    if (!fgets(buf, (int)bufsz, fp)) {
+        pclose(fp);
+        return NULL;
+    }
+    pclose(fp);
+
+    p = buf;
+    if (*p == '\'') p++;
+    tlen = strlen(p);
+    while (tlen > 0 && (p[tlen-1] == '\n' || p[tlen-1] == '\'' || p[tlen-1] == '\r'))
+        p[--tlen] = '\0';
+    return *p ? p : NULL;
+}
+
 int smu_elevate_if_necessary(int argc, char **argv)
 {
-    static const char *paths[] = {"/bin", "/sbin", "/usr/bin", "/usr/sbin"};
-    char sudo_path[256], cmd[2048];
     char self[1024];
     ssize_t len;
-    int found = 0;
+    pid_t pid;
+    int status;
 
     if (geteuid() == 0)
         return 1;
 
-    for (size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
-        snprintf(sudo_path, sizeof(sudo_path), "%s/sudo", paths[i]);
-        if (access(sudo_path, F_OK) == 0) {
-            found = 1;
-            break;
-        }
-    }
-
     len = readlink("/proc/self/exe", self, sizeof(self) - 1);
-    if (!found || len <= 0) {
+    if (len <= 0) {
         fprintf(stderr, "This tool must be run as root.\n");
         return 0;
     }
     self[len] = '\0';
 
-    snprintf(cmd, sizeof(cmd), "%s -S %s", sudo_path, self);
-    for (int i = 1; i < argc; i++) {
-        strcat(cmd, " ");
-        strcat(cmd, argv[i]);
+    /*
+     * Use pkexec for graphical privilege elevation.
+     * pkexec strips the environment, so we pass display variables as
+     * --env-VAR=VALUE arguments.  The binary restores them via
+     * smu_restore_env() before GTK init.
+     *
+     * We use fork/execvp instead of system() to avoid shell injection.
+     */
+
+    /* Query GTK theme from gsettings if not already set */
+    static char theme_buf[256];
+    if (!getenv("GTK_THEME")) {
+        const char *theme = query_gsetting("gtk-theme", theme_buf, sizeof(theme_buf));
+        if (theme)
+            setenv("GTK_THEME", theme, 1);
     }
 
-    return system(cmd) == 0 ? -1 : 0;
+    /* Query dark mode preference */
+    static char scheme_buf[64];
+    if (!getenv("ADW_DEBUG_COLOR_SCHEME")) {
+        const char *scheme = query_gsetting("color-scheme", scheme_buf, sizeof(scheme_buf));
+        if (scheme && strstr(scheme, "prefer-dark"))
+            setenv("ADW_DEBUG_COLOR_SCHEME", "prefer-dark", 1);
+    }
+
+    /* Build argv for: pkexec <self> --env-VAR=VALUE ... <original args> */
+    const char *env_vars[] = {
+        "DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR",
+        "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS",
+        "GTK_THEME", "ADW_DEBUG_COLOR_SCHEME",
+        "XDG_CONFIG_HOME", "HOME", NULL
+    };
+
+    /* Max args: "pkexec" + self + 9 env vars + (argc-1) original args + NULL */
+    int max_args = 2 + 9 + argc;
+    char **new_argv = calloc((size_t)max_args, sizeof(char *));
+    if (!new_argv) {
+        fprintf(stderr, "Memory allocation failed.\n");
+        return 0;
+    }
+
+    /* Static buffers for --env-VAR=VALUE strings */
+    static char env_bufs[9][512];
+
+    int n = 0;
+    new_argv[n++] = "pkexec";
+    new_argv[n++] = self;
+
+    for (int e = 0; env_vars[e]; e++) {
+        const char *val = getenv(env_vars[e]);
+        if (val) {
+            snprintf(env_bufs[e], sizeof(env_bufs[e]), "--env-%s=%s", env_vars[e], val);
+            new_argv[n++] = env_bufs[e];
+        }
+    }
+
+    for (int i = 1; i < argc; i++)
+        new_argv[n++] = argv[i];
+    new_argv[n] = NULL;
+
+    pid = fork();
+    if (pid < 0) {
+        free(new_argv);
+        fprintf(stderr, "fork() failed.\n");
+        return 0;
+    }
+
+    if (pid == 0) {
+        /* Child: exec pkexec */
+        execvp("pkexec", new_argv);
+        _exit(127);
+    }
+
+    /* Parent: wait for child */
+    free(new_argv);
+    waitpid(pid, &status, 0);
+    return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? -1 : 0;
+}
+
+/*
+ * Restore environment variables passed via --env-VAR=VALUE arguments
+ * (injected by smu_elevate_if_necessary for pkexec).
+ * Strips those arguments from argv in-place.
+ */
+void smu_restore_env(int *argc, char **argv)
+{
+    int dst = 1;
+    for (int i = 1; i < *argc; i++) {
+        if (strncmp(argv[i], "--env-", 6) == 0) {
+            char *eq = strchr(argv[i] + 6, '=');
+            if (eq) {
+                *eq = '\0';
+                setenv(argv[i] + 6, eq + 1, 1);
+            }
+        } else {
+            argv[dst++] = argv[i];
+        }
+    }
+    *argc = dst;
+    argv[dst] = NULL;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════ */

@@ -6,18 +6,33 @@
 #include <libsmu.h>
 #include "smu_common.h"
 
-extern int cli_main(int argc, char **argv);
-#ifdef HAVE_GTK
-extern int gui_main(int argc, char **argv);
-#endif
+static int wants_gui(int argc, char **argv)
+{
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--gui") == 0 || strcmp(argv[i], "-g") == 0)
+            return 1;
+    }
+    return 0;
+}
 
 int main(int argc, char **argv)
 {
     smu_obj_t *o;
+    int elev;
+    int gui = wants_gui(argc, argv);
 
-    smu_setup_signals();
-    if (smu_elevate_if_necessary(argc, argv) == 0)
+#ifndef HAVE_GTK
+    if (gui) {
+        fprintf(stderr, "GUI not available (built without GTK4 support).\n");
         return 1;
+    }
+#endif
+
+    smu_restore_env(&argc, argv);
+    smu_setup_signals();
+    elev = smu_elevate_if_necessary(argc, argv);
+    if (elev <= 0)
+        return elev == 0 ? 1 : 0;
 
     o = smu_get_obj();
     if (smu_init(o) != SMU_Return_OK) {
@@ -27,7 +42,7 @@ int main(int argc, char **argv)
     }
 
 #ifdef HAVE_GTK
-    if (argc > 1 && strcmp(argv[1], "--gui") == 0)
+    if (gui)
         return gui_main(argc, argv);
 #endif
 

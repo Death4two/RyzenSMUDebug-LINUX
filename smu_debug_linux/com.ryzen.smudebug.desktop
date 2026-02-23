@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Ryzen SMU Debug Tool
+Comment=AMD Ryzen SMU debugging and tuning tool
+Exec=/opt/RyzenSMUDebug/RyzenSMUDebug-x86_64.AppImage
+Icon=com.ryzen.smudebug
+Terminal=false
+Categories=System;HardwareSettings;

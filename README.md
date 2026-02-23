@@ -21,7 +21,7 @@ A Linux port of the Windows ZenStates SMU Debug Tool. Communicates with the AMD 
 
 This project builds on and references the following:
 
-- **[ryzen_smu](https://github.com/amkillam/ryzen_smu)** — Linux kernel driver and userspace library (`libsmu`) for AMD Ryzen SMU/SMN access. Used for all communication with the SMU (PM table, RSMU/MP1/HSMP commands, SMN read/write).  
+- **[ryzen_smu](https://github.com/amkillam/ryzen_smu)** — Linux kernel driver and userspace library (`libsmu`) for AMD Ryzen SMU/SMN access. Used for all communication with the SMU (PM table, RSMU/MP1/HSMP commands, SMN read/write).
   - RSMU command reference: `ryzen_smu/docs/rsmu_commands.md`
 - **ZenStates-Core** — Source for RSMU command IDs and PSM/Curve Optimizer behavior per platform (e.g. `GetDldoPsmMargin` / `SetDldoPsmMargin`, Zen3/Zen4/Zen5 SMUSettings). Core mask encoding and GET/SET command IDs (e.g. 0xD5 for Granite Ridge) are derived from ZenStates-Core.
 - **SMUDebugTool (Windows)** — Windows reference implementation (ZenStates-based). Used for behavior parity: core mask encoding, PM table layout (index/offset/value), mailbox scan logic, and UI concepts for PBO/Curve Optimizer/FMax.
@@ -32,7 +32,7 @@ Thanks to the authors and contributors of the above projects.
 
 **You must install and load the `ryzen_smu` kernel driver before this software will work.** This tool talks to the SMU only through that driver; without it, the program will fail (e.g. "SMU Driver Not Present" or similar).
 
-1. **Install ryzen_smu**  
+1. **Install ryzen_smu**
    Clone and build the driver, then load the module:
    ```bash
    git clone https://github.com/amkillam/ryzen_smu.git
@@ -43,44 +43,72 @@ Thanks to the authors and contributors of the above projects.
    Or install via DKMS so the driver loads automatically after reboots.
 
 2. **Build tools**: `gcc`, `make`
-3. **Root access**: Required for driver communication (run `smu_debug_tool` with `sudo`).
 
-## Building
+3. **GTK4** (for the GUI):
+   - Arch: `sudo pacman -S gtk4`
+   - Fedora: `sudo dnf install gtk4-devel`
+   - Debian/Ubuntu: `sudo apt install libgtk-4-dev`
+
+   The GUI is optional — if GTK4 is not found, only the CLI is built.
+
+## Quick Install (AppImage)
+
+The easiest way to install is using the install script, which builds the binary, creates an AppImage, and installs everything:
+
+```bash
+cd smu_debug_linux
+sudo ./install.sh
+```
+
+This will:
+- Build the binary and AppImage (downloads `appimagetool` automatically if needed)
+- Install the binary to `/usr/local/bin/`
+- Install the AppImage to `/opt/RyzenSMUDebug/`
+- Install the polkit policy (for graphical password prompt)
+- Install the desktop file and icon (app launcher + desktop shortcut)
+
+After installation, launch from your application menu or desktop shortcut.
+
+## Building (manual)
 
 ```bash
 cd smu_debug_linux
 make
 ```
 
-The binary `smu_debug_tool` will be created in the current directory. If GTK3 is available (`pkg-config gtk+-3.0`), the build includes the GUI; run with `--gui` to use it.
+The binary `smu_debug_tool` will be created in the current directory. If GTK4 is available (`pkg-config gtk4`), the build includes the GUI; run with `--gui` to use it.
 
 Optional install to system path:
 ```bash
-sudo make install   # installs to /usr/local/bin/
+sudo make install   # installs binary, polkit policy, and desktop file
 ```
 
-**GUI dependency:** For the graphical interface, install GTK3 development files, e.g.:
-- Debian/Ubuntu: `sudo apt install libgtk-3-dev`
-- Fedora: `sudo dnf install gtk3-devel`
-- Arch: `sudo pacman -S gtk3`
+### Building the AppImage manually
+
+```bash
+cd smu_debug_linux
+./build-appimage.sh
+```
+
+Requires `appimagetool` — either in PATH or as `appimagetool-x86_64.AppImage` in the same directory. Download from [appimagetool releases](https://github.com/AppImage/appimagetool/releases).
 
 ## Usage
 
 **CLI (interactive menu):**
 ```bash
-sudo ./smu_debug_tool
+smu_debug_tool
 ```
 
 **GUI:**
 ```bash
-sudo ./smu_debug_tool --gui
+smu_debug_tool --gui
 ```
 
-The tool will auto-elevate via `sudo` if not run as root.
+The tool auto-elevates via `pkexec` (graphical password prompt) if not run as root. No need to use `sudo` — just run it directly.
 
 ## GUI (--gui)
 
-When built with GTK3, `smu_debug_tool --gui` opens a window with tabs:
+When built with GTK4, `smu_debug_tool --gui` opens a window with tabs:
 
 | Tab | Contents |
 |-----|----------|
@@ -146,10 +174,10 @@ Scan ranges are codename-dependent, matching the Windows tool exactly.
 
 ## Supported platforms
 
-**PBO / Curve Optimizer / FMax tuning (GUI and related CLI):**  
+**PBO / Curve Optimizer / FMax tuning (GUI and related CLI):**
 **Only Granite Ridge (Zen 5 desktop, e.g. Ryzen 9000 series)** is supported and tested. Other CPUs may be detected and basic SMU/PM table features may work, but tuning (CO, FMax) is unsupported and may be incorrect or unsafe.
 
-**General SMU/PM table/SMN (CLI, other tabs):**  
+**General SMU/PM table/SMN (CLI, other tabs):**
 Behavior depends on the `ryzen_smu` driver. Many AMD Ryzen processors are supported by the driver (e.g. Matisse, Vermeer, Raphael, Granite Ridge, Renoir, Cezanne, Phoenix, Milan, and others). See the driver repository for the full list.
 
 ## License

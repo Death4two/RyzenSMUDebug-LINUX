@@ -1,11 +1,12 @@
 /*
- * Ryzen SMU Debug Tool - GTK3 GUI
+ * Ryzen SMU Debug Tool - GTK4 GUI
  * Displays system info, PM table, per-core Curve Optimizer, FMax override, SMU/SMN access.
  */
 #define _GNU_SOURCE
 
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <gtk/gtk.h>
@@ -18,14 +19,46 @@
 #define FMAX_MIN       0
 #define FMAX_MAX       6000
 
+/* ─── PmRow GObject for ColumnView ─── */
+
+#define PM_ROW_TYPE (pm_row_get_type())
+G_DECLARE_FINAL_TYPE(PmRow, pm_row, PM, ROW, GObject)
+
+struct _PmRow {
+    GObject parent;
+    char idx[16];
+    char offset[16];
+    char value[24];
+    char max[24];
+};
+
+G_DEFINE_TYPE(PmRow, pm_row, G_TYPE_OBJECT)
+
+static void pm_row_class_init(PmRowClass *klass) { (void)klass; }
+static void pm_row_init(PmRow *self) { (void)self; }
+
+static PmRow *pm_row_new(const char *idx, const char *offset, const char *value, const char *max)
+{
+    PmRow *r = g_object_new(PM_ROW_TYPE, NULL);
+    g_strlcpy(r->idx, idx, sizeof(r->idx));
+    g_strlcpy(r->offset, offset, sizeof(r->offset));
+    g_strlcpy(r->value, value, sizeof(r->value));
+    g_strlcpy(r->max, max, sizeof(r->max));
+    return r;
+}
+
+/* ─── Globals ─── */
+
 static GtkWidget *log_text;
-static GtkListStore *pm_store;
+static GListStore *pm_store;
 static GtkWidget *co_spins[CO_MAX_CORES];
 static GtkWidget *co_set_buttons[CO_MAX_CORES];
 static GtkWidget *fmax_spin;
 static gboolean pm_timer_active;
 static float *pm_max_values;
 static unsigned int pm_num_entries;
+
+/* ─── Log ─── */
 
 static void log_append(const char *msg)
 {
@@ -46,19 +79,6 @@ static void log_appendf(const char *fmt, ...)
     log_append(buf);
 }
 
-static GtkWidget *add_tab(GtkWidget *notebook, const char *label, GtkWidget *child)
-{
-    GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL);
-    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),
-                                   GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
-    gtk_container_add(GTK_CONTAINER(scroll), child);
-    gtk_widget_show(child);
-    GtkWidget *tab_label = gtk_label_new(label);
-    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), scroll, tab_label);
-    gtk_widget_show(scroll);
-    return scroll;
-}
-
 /* ─── System Info ─── */
 static GtkWidget *build_system_info_tab(void)
 {
@@ -71,8 +91,9 @@ static GtkWidget *build_system_info_tab(void)
 
 #define ROW(lab, val) do { \
     gtk_grid_attach(GTK_GRID(grid), gtk_label_new(lab), 0, row, 1, 1); \
-    gtk_grid_attach(GTK_GRID(grid), gtk_label_new(val), 1, row, 1, 1); \
-    gtk_widget_set_halign(gtk_grid_get_child_at(GTK_GRID(grid), 1, row), GTK_ALIGN_START); \
+    GtkWidget *_v = gtk_label_new(val); \
+    gtk_widget_set_halign(_v, GTK_ALIGN_START); \
+    gtk_grid_attach(GTK_GRID(grid), _v, 1, row, 1, 1); \
     row++; } while(0)
 
     ROW("CPU Model:", smu_get_processor_name());
@@ -101,6 +122,7 @@ static GtkWidget *build_system_info_tab(void)
 }
 
 /* ─── PM Table ─── */
+
 static void pm_table_refresh(void)
 {
     smu_obj_t *obj = smu_get_obj();
@@ -128,16 +150,16 @@ static void pm_table_refresh(void)
             for (unsigned int i = 0; i < n; i++)
                 pm_max_values[i] = table[i];
     }
-    gtk_list_store_clear(pm_store);
+    g_list_store_remove_all(pm_store);
     for (unsigned int i = 0; i < n; i++) {
-        GtkTreeIter iter;
         char idx[16], off[16], val[24], max[24];
         snprintf(idx, sizeof(idx), "%04u", i);
         snprintf(off, sizeof(off), "0x%04X", i * 4);
         snprintf(val, sizeof(val), "%.6f", table[i]);
         snprintf(max, sizeof(max), "%.6f", pm_max_values ? pm_max_values[i] : table[i]);
-        gtk_list_store_append(pm_store, &iter);
-        gtk_list_store_set(pm_store, &iter, 0, idx, 1, off, 2, val, 3, max, -1);
+        PmRow *row = pm_row_new(idx, off, val, max);
+        g_list_store_append(pm_store, row);
+        g_object_unref(row);
     }
     free(pm_buf);
 }
@@ -152,18 +174,64 @@ static gboolean pm_timer_cb(gpointer data)
 
 static void pm_refresh_clicked(GtkButton *btn, gpointer data)
 {
-    (void)btn;
-    (void)data;
+    (void)btn; (void)data;
     pm_table_refresh();
     log_append("PM table refreshed.");
 }
 
-static void pm_auto_toggled(GtkToggleButton *tb, gpointer data)
+static void pm_auto_toggled(GtkCheckButton *cb, gpointer data)
 {
     (void)data;
-    pm_timer_active = gtk_toggle_button_get_active(tb);
+    pm_timer_active = gtk_check_button_get_active(cb);
     if (pm_timer_active)
         g_timeout_add(2000, pm_timer_cb, NULL);
+}
+
+/* Column factory helpers */
+static void setup_label_cb(GtkSignalListItemFactory *f, GtkListItem *item, gpointer data)
+{
+    (void)f; (void)data;
+    GtkWidget *label = gtk_label_new("");
+    gtk_widget_set_halign(label, GTK_ALIGN_START);
+    gtk_list_item_set_child(item, label);
+}
+
+static void bind_idx_cb(GtkSignalListItemFactory *f, GtkListItem *item, gpointer data)
+{
+    (void)f; (void)data;
+    PmRow *row = gtk_list_item_get_item(item);
+    gtk_label_set_text(GTK_LABEL(gtk_list_item_get_child(item)), row->idx);
+}
+
+static void bind_offset_cb(GtkSignalListItemFactory *f, GtkListItem *item, gpointer data)
+{
+    (void)f; (void)data;
+    PmRow *row = gtk_list_item_get_item(item);
+    gtk_label_set_text(GTK_LABEL(gtk_list_item_get_child(item)), row->offset);
+}
+
+static void bind_value_cb(GtkSignalListItemFactory *f, GtkListItem *item, gpointer data)
+{
+    (void)f; (void)data;
+    PmRow *row = gtk_list_item_get_item(item);
+    gtk_label_set_text(GTK_LABEL(gtk_list_item_get_child(item)), row->value);
+}
+
+static void bind_max_cb(GtkSignalListItemFactory *f, GtkListItem *item, gpointer data)
+{
+    (void)f; (void)data;
+    PmRow *row = gtk_list_item_get_item(item);
+    gtk_label_set_text(GTK_LABEL(gtk_list_item_get_child(item)), row->max);
+}
+
+static void add_pm_column(GtkColumnView *cv, const char *title, GCallback bind_cb)
+{
+    GtkListItemFactory *factory = gtk_signal_list_item_factory_new();
+    g_signal_connect(factory, "setup", G_CALLBACK(setup_label_cb), NULL);
+    g_signal_connect(factory, "bind", bind_cb, NULL);
+    GtkColumnViewColumn *col = gtk_column_view_column_new(title, factory);
+    gtk_column_view_column_set_expand(col, TRUE);
+    gtk_column_view_append_column(cv, col);
 }
 
 static GtkWidget *build_pm_table_tab(void)
@@ -174,27 +242,24 @@ static GtkWidget *build_pm_table_tab(void)
     GtkWidget *btn_auto = gtk_check_button_new_with_label("Auto-refresh (2 s)");
     g_signal_connect(btn_refresh, "clicked", G_CALLBACK(pm_refresh_clicked), NULL);
     g_signal_connect(btn_auto, "toggled", G_CALLBACK(pm_auto_toggled), NULL);
-    gtk_container_add(GTK_CONTAINER(toolbar), btn_refresh);
-    gtk_container_add(GTK_CONTAINER(toolbar), btn_auto);
-    gtk_box_pack_start(GTK_BOX(box), toolbar, FALSE, FALSE, 0);
+    gtk_box_append(GTK_BOX(toolbar), btn_refresh);
+    gtk_box_append(GTK_BOX(toolbar), btn_auto);
+    gtk_box_append(GTK_BOX(box), toolbar);
 
-    pm_store = gtk_list_store_new(4, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING);
-    GtkWidget *tv = gtk_tree_view_new_with_model(GTK_TREE_MODEL(pm_store));
-    g_object_unref(pm_store);
-    gtk_tree_view_set_headers_visible(GTK_TREE_VIEW(tv), TRUE);
-    gtk_tree_view_append_column(GTK_TREE_VIEW(tv),
-        gtk_tree_view_column_new_with_attributes("Index", gtk_cell_renderer_text_new(), "text", 0, NULL));
-    gtk_tree_view_append_column(GTK_TREE_VIEW(tv),
-        gtk_tree_view_column_new_with_attributes("Offset", gtk_cell_renderer_text_new(), "text", 1, NULL));
-    gtk_tree_view_append_column(GTK_TREE_VIEW(tv),
-        gtk_tree_view_column_new_with_attributes("Value", gtk_cell_renderer_text_new(), "text", 2, NULL));
-    gtk_tree_view_append_column(GTK_TREE_VIEW(tv),
-        gtk_tree_view_column_new_with_attributes("Max", gtk_cell_renderer_text_new(), "text", 3, NULL));
+    pm_store = g_list_store_new(PM_ROW_TYPE);
+    GtkNoSelection *sel = gtk_no_selection_new(G_LIST_MODEL(pm_store));
+    GtkWidget *cv = gtk_column_view_new(GTK_SELECTION_MODEL(sel));
 
-    GtkWidget *sw = gtk_scrolled_window_new(NULL, NULL);
-    gtk_container_add(GTK_CONTAINER(sw), tv);
-    gtk_box_pack_start(GTK_BOX(box), sw, TRUE, TRUE, 0);
-    gtk_widget_show_all(box);
+    add_pm_column(GTK_COLUMN_VIEW(cv), "Index", G_CALLBACK(bind_idx_cb));
+    add_pm_column(GTK_COLUMN_VIEW(cv), "Offset", G_CALLBACK(bind_offset_cb));
+    add_pm_column(GTK_COLUMN_VIEW(cv), "Value", G_CALLBACK(bind_value_cb));
+    add_pm_column(GTK_COLUMN_VIEW(cv), "Max", G_CALLBACK(bind_max_cb));
+
+    GtkWidget *sw = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), cv);
+    gtk_widget_set_vexpand(sw, TRUE);
+    gtk_widget_set_hexpand(sw, TRUE);
+    gtk_box_append(GTK_BOX(box), sw);
     pm_table_refresh();
     return box;
 }
@@ -202,8 +267,7 @@ static GtkWidget *build_pm_table_tab(void)
 /* ─── PBO (Curve Optimizer + FMax) ─── */
 static void fmax_apply_clicked(GtkButton *btn, gpointer data)
 {
-    (void)btn;
-    (void)data;
+    (void)btn; (void)data;
     unsigned int mhz = (unsigned int)gtk_spin_button_get_value(GTK_SPIN_BUTTON(fmax_spin));
     if (smu_set_fmax(mhz) == 0) {
         log_appendf("FMax set to %u MHz.", mhz);
@@ -217,8 +281,7 @@ static void fmax_apply_clicked(GtkButton *btn, gpointer data)
 
 static void fmax_read_clicked(GtkButton *btn, gpointer data)
 {
-    (void)btn;
-    (void)data;
+    (void)btn; (void)data;
     unsigned int mhz;
     if (smu_get_fmax(&mhz) == 0) {
         gtk_spin_button_set_value(GTK_SPIN_BUTTON(fmax_spin), (double)mhz);
@@ -257,8 +320,7 @@ static void co_apply_one_clicked(GtkButton *btn, gpointer data)
 
 static void co_read_all_clicked(GtkButton *btn, gpointer data)
 {
-    (void)btn;
-    (void)data;
+    (void)btn; (void)data;
     unsigned int ccds, ccxs, cpc, phys;
     int read_ok = 0;
     if (smu_get_topology(&ccds, &ccxs, &cpc, &phys) != 0) return;
@@ -284,7 +346,7 @@ static GtkWidget *build_pbo_tab(void)
     gtk_grid_set_column_spacing(GTK_GRID(grid), 8);
     g_object_set(grid, "margin-top", 16, NULL);
 
-    /* FMax - label centered, then controls in a centered row */
+    /* FMax */
     GtkWidget *fmax_label = gtk_label_new("FMax override (MHz):");
     gtk_widget_set_halign(fmax_label, GTK_ALIGN_CENTER);
     gtk_grid_attach(GTK_GRID(grid), fmax_label, 0, 0, 7, 1);
@@ -292,17 +354,16 @@ static GtkWidget *build_pbo_tab(void)
     gtk_widget_set_halign(fmax_row, GTK_ALIGN_CENTER);
     fmax_spin = gtk_spin_button_new_with_range((gdouble)FMAX_MIN, (gdouble)FMAX_MAX, 25.0);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(fmax_spin), 0.0);
-    gtk_box_pack_start(GTK_BOX(fmax_row), fmax_spin, FALSE, FALSE, 0);
+    gtk_box_append(GTK_BOX(fmax_row), fmax_spin);
     GtkWidget *btn_fmax_read = gtk_button_new_with_label("Read");
     GtkWidget *btn_fmax_apply = gtk_button_new_with_label("Apply");
     g_signal_connect(btn_fmax_read, "clicked", G_CALLBACK(fmax_read_clicked), NULL);
     g_signal_connect(btn_fmax_apply, "clicked", G_CALLBACK(fmax_apply_clicked), NULL);
-    gtk_box_pack_start(GTK_BOX(fmax_row), btn_fmax_read, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(fmax_row), btn_fmax_apply, FALSE, FALSE, 0);
+    gtk_box_append(GTK_BOX(fmax_row), btn_fmax_read);
+    gtk_box_append(GTK_BOX(fmax_row), btn_fmax_apply);
     gtk_grid_attach(GTK_GRID(grid), fmax_row, 0, 1, 7, 1);
 
-    /* Curve Optimizer - two CCD columns: Label | Spin | Set  (spacer)  Label | Spin | Set
-     * Grid cols: 0=label, 1=spin, 2=set, 3=spacer, 4=label, 5=spin, 6=set */
+    /* Curve Optimizer */
     GtkWidget *co_heading = gtk_label_new("Per-core Curve Optimizer:");
     gtk_widget_set_tooltip_text(co_heading, "Enter offsets (-60 to +10). Click Set per-core.");
     gtk_widget_set_halign(co_heading, GTK_ALIGN_CENTER);
@@ -331,7 +392,6 @@ static GtkWidget *build_pbo_tab(void)
         gtk_spin_button_set_value(GTK_SPIN_BUTTON(co_spins[i]), 0.0);
         gtk_spin_button_set_numeric(GTK_SPIN_BUTTON(co_spins[i]), TRUE);
         gtk_editable_set_editable(GTK_EDITABLE(co_spins[i]), TRUE);
-        gtk_widget_set_can_focus(co_spins[i], TRUE);
         gtk_widget_set_sensitive(co_spins[i], TRUE);
         g_signal_connect(co_spins[i], "value-changed", G_CALLBACK(co_value_changed), GINT_TO_POINTER((int)i));
         gtk_grid_attach(GTK_GRID(grid), co_spins[i], col_base + 1, row, 1, 1);
@@ -339,9 +399,8 @@ static GtkWidget *build_pbo_tab(void)
         co_set_buttons[i] = set_btn;
         g_signal_connect(set_btn, "clicked", G_CALLBACK(co_apply_one_clicked), GINT_TO_POINTER((int)i));
         gtk_grid_attach(GTK_GRID(grid), set_btn, col_base + 2, row, 1, 1);
-        gtk_widget_set_sensitive(set_btn, FALSE);  /* enabled when user changes the offset (value-changed) */
+        gtk_widget_set_sensitive(set_btn, FALSE);
     }
-    /* Single CCD (8 or fewer physical cores): make CCD1 (cores 8-15) uneditable */
     if (phys <= 8) {
         for (unsigned int i = 8; i < CO_MAX_CORES; i++) {
             gtk_widget_set_sensitive(co_spins[i], FALSE);
@@ -355,12 +414,10 @@ static GtkWidget *build_pbo_tab(void)
     int btn_row = 4 + 8;
     GtkWidget *btn_co_read = gtk_button_new_with_label("Read current CO");
     g_signal_connect(btn_co_read, "clicked", G_CALLBACK(co_read_all_clicked), NULL);
-    gtk_grid_attach(GTK_GRID(grid), btn_co_read, 2, btn_row, 3, 1);  /* center bottom */
+    gtk_grid_attach(GTK_GRID(grid), btn_co_read, 2, btn_row, 3, 1);
 
-    /* Center the whole grid in the tab */
     gtk_widget_set_halign(grid, GTK_ALIGN_CENTER);
-    gtk_box_pack_start(GTK_BOX(box), grid, FALSE, FALSE, 0);
-    gtk_widget_show_all(box);
+    gtk_box_append(GTK_BOX(box), grid);
     /* Initial FMax read */
     unsigned int mhz;
     if (smu_get_fmax(&mhz) == 0)
@@ -379,7 +436,7 @@ static void smu_cmd_send_clicked(GtkButton *btn, gpointer data)
     GtkWidget *resp_tv = (GtkWidget *)g_object_get_data(G_OBJECT(win), "smu_resp");
     if (!cmd_entry || !arg_entries || !combo || !resp_tv) return;
     unsigned int cmd_val;
-    if (sscanf(gtk_entry_get_text(GTK_ENTRY(cmd_entry)), "%x", &cmd_val) != 1) {
+    if (sscanf(gtk_editable_get_text(GTK_EDITABLE(cmd_entry)), "%x", &cmd_val) != 1) {
         log_append("Invalid command (use hex).");
         return;
     }
@@ -388,13 +445,13 @@ static void smu_cmd_send_clicked(GtkButton *btn, gpointer data)
     GtkWidget **args_arr = (GtkWidget **)g_object_get_data(G_OBJECT(arg_entries), "entries");
     if (args_arr) {
         for (int i = 0; i < 6; i++) {
-            const char *t = gtk_entry_get_text(GTK_ENTRY(args_arr[i]));
+            const char *t = gtk_editable_get_text(GTK_EDITABLE(args_arr[i]));
             unsigned int v;
             if (sscanf(t, "%x", &v) == 1)
                 args.args[i] = v;
         }
     }
-    enum smu_mailbox mb = (enum smu_mailbox)gtk_combo_box_get_active(GTK_COMBO_BOX(combo));
+    enum smu_mailbox mb = (enum smu_mailbox)gtk_drop_down_get_selected(GTK_DROP_DOWN(combo));
     smu_return_val ret = smu_send_command(smu_get_obj(), cmd_val, &args, mb);
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(resp_tv));
     gtk_text_buffer_set_text(buf, "", -1);
@@ -419,28 +476,27 @@ static GtkWidget *build_smu_cmd_tab(GtkWidget *window)
     int row = 0;
     gtk_grid_attach(GTK_GRID(grid), gtk_label_new("Command (hex):"), 0, row, 1, 1);
     GtkWidget *cmd_entry = gtk_entry_new();
-    gtk_entry_set_text(GTK_ENTRY(cmd_entry), "01");
+    gtk_editable_set_text(GTK_EDITABLE(cmd_entry), "01");
     gtk_grid_attach(GTK_GRID(grid), cmd_entry, 1, row, 1, 1);
     row++;
     GtkWidget *args_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
-    GtkWidget *args_arr[6];
+    GtkWidget **args_arr = g_new(GtkWidget *, 6);
     for (int i = 0; i < 6; i++) {
         GtkWidget *r = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
         char buf[16];
         snprintf(buf, sizeof(buf), "Arg%d:", i);
-        gtk_container_add(GTK_CONTAINER(r), gtk_label_new(buf));
+        gtk_box_append(GTK_BOX(r), gtk_label_new(buf));
         args_arr[i] = gtk_entry_new();
-        gtk_entry_set_text(GTK_ENTRY(args_arr[i]), "0");
-        gtk_container_add(GTK_CONTAINER(r), args_arr[i]);
-        gtk_container_add(GTK_CONTAINER(args_box), r);
+        gtk_editable_set_text(GTK_EDITABLE(args_arr[i]), "0");
+        gtk_box_append(GTK_BOX(r), args_arr[i]);
+        gtk_box_append(GTK_BOX(args_box), r);
     }
     g_object_set_data(G_OBJECT(args_box), "entries", args_arr);
     gtk_grid_attach(GTK_GRID(grid), gtk_label_new("Mailbox:"), 0, row, 1, 1);
-    GtkWidget *combo = gtk_combo_box_text_new();
-    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), NULL, "RSMU");
-    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), NULL, "MP1");
-    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), NULL, "HSMP");
-    gtk_combo_box_set_active(GTK_COMBO_BOX(combo), 0);
+    const char *mailboxes[] = {"RSMU", "MP1", "HSMP", NULL};
+    GtkStringList *sl = gtk_string_list_new(mailboxes);
+    GtkWidget *combo = gtk_drop_down_new(G_LIST_MODEL(sl), NULL);
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(combo), 0);
     gtk_grid_attach(GTK_GRID(grid), combo, 1, row, 1, 1);
     row++;
     gtk_grid_attach(GTK_GRID(grid), args_box, 0, row, 2, 1);
@@ -452,14 +508,13 @@ static GtkWidget *build_smu_cmd_tab(GtkWidget *window)
     GtkWidget *resp_tv = gtk_text_view_new();
     gtk_text_view_set_editable(GTK_TEXT_VIEW(resp_tv), FALSE);
     gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(resp_tv), GTK_WRAP_NONE);
-    GtkWidget *sw = gtk_scrolled_window_new(NULL, NULL);
-    gtk_container_add(GTK_CONTAINER(sw), resp_tv);
+    GtkWidget *sw = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), resp_tv);
     gtk_grid_attach(GTK_GRID(grid), sw, 0, row, 2, 3);
     g_object_set_data(G_OBJECT(window), "smu_cmd", cmd_entry);
     g_object_set_data(G_OBJECT(window), "smu_args", args_box);
     g_object_set_data(G_OBJECT(window), "smu_mailbox", combo);
     g_object_set_data(G_OBJECT(window), "smu_resp", resp_tv);
-    gtk_widget_show_all(grid);
     return grid;
 }
 
@@ -472,7 +527,7 @@ static void smn_read_clicked(GtkButton *btn, gpointer data)
     GtkWidget *val_e = (GtkWidget *)g_object_get_data(G_OBJECT(win), "smn_val");
     GtkWidget *resp = (GtkWidget *)g_object_get_data(G_OBJECT(win), "smn_resp");
     unsigned int addr, val;
-    if (sscanf(gtk_entry_get_text(GTK_ENTRY(addr_e)), "%x", &addr) != 1) {
+    if (sscanf(gtk_editable_get_text(GTK_EDITABLE(addr_e)), "%x", &addr) != 1) {
         log_append("Invalid SMN address.");
         return;
     }
@@ -482,7 +537,7 @@ static void smn_read_clicked(GtkButton *btn, gpointer data)
     }
     char buf[64];
     snprintf(buf, sizeof(buf), "0x%08X", val);
-    gtk_entry_set_text(GTK_ENTRY(val_e), buf);
+    gtk_editable_set_text(GTK_EDITABLE(val_e), buf);
     snprintf(buf, sizeof(buf), "0x%08X = 0x%08X (%u)", addr, val, val);
     gtk_label_set_text(GTK_LABEL(resp), buf);
 }
@@ -495,8 +550,8 @@ static void smn_write_clicked(GtkButton *btn, gpointer data)
     GtkWidget *val_e = (GtkWidget *)g_object_get_data(G_OBJECT(win), "smn_val");
     GtkWidget *resp = (GtkWidget *)g_object_get_data(G_OBJECT(win), "smn_resp");
     unsigned int addr, val;
-    if (sscanf(gtk_entry_get_text(GTK_ENTRY(addr_e)), "%x", &addr) != 1 ||
-        sscanf(gtk_entry_get_text(GTK_ENTRY(val_e)), "%x", &val) != 1) {
+    if (sscanf(gtk_editable_get_text(GTK_EDITABLE(addr_e)), "%x", &addr) != 1 ||
+        sscanf(gtk_editable_get_text(GTK_EDITABLE(val_e)), "%x", &val) != 1) {
         log_append("Invalid SMN address or value.");
         return;
     }
@@ -530,7 +585,6 @@ static GtkWidget *build_smn_tab(GtkWidget *window)
     g_object_set_data(G_OBJECT(window), "smn_addr", addr_e);
     g_object_set_data(G_OBJECT(window), "smn_val", val_e);
     g_object_set_data(G_OBJECT(window), "smn_resp", resp);
-    gtk_widget_show_all(grid);
     return grid;
 }
 
@@ -540,65 +594,83 @@ static GtkWidget *build_log_tab(void)
     log_text = gtk_text_view_new();
     gtk_text_view_set_editable(GTK_TEXT_VIEW(log_text), FALSE);
     gtk_text_view_set_monospace(GTK_TEXT_VIEW(log_text), TRUE);
-    GtkWidget *sw = gtk_scrolled_window_new(NULL, NULL);
-    gtk_container_add(GTK_CONTAINER(sw), log_text);
+    GtkWidget *sw = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), log_text);
     log_append("Ryzen SMU Debug Tool GUI ready.");
     return sw;
 }
 
-static void window_destroy(GtkWidget *w, gpointer data)
+static gboolean on_close_request(GtkWindow *win, gpointer data)
 {
-    (void)w;
-    (void)data;
+    (void)win; (void)data;
     pm_timer_active = FALSE;
     free(pm_max_values);
     pm_max_values = NULL;
     smu_free(smu_get_obj());
-    gtk_main_quit();
+    return FALSE;
+}
+
+static void activate(GtkApplication *app, gpointer user_data)
+{
+    (void)user_data;
+    GtkWidget *window, *notebook;
+
+    window = gtk_application_window_new(app);
+    gtk_window_set_default_size(GTK_WINDOW(window), 900, 600);
+    gtk_window_set_title(GTK_WINDOW(window), "Ryzen SMU Debug Tool");
+    gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
+    g_signal_connect(window, "close-request", G_CALLBACK(on_close_request), NULL);
+
+    notebook = gtk_notebook_new();
+    gtk_window_set_child(GTK_WINDOW(window), notebook);
+
+    /* System Info tab */
+    GtkWidget *sys_scroll = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sys_scroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sys_scroll), build_system_info_tab());
+    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), sys_scroll, gtk_label_new("System Info"));
+
+    /* PM Table tab */
+    GtkWidget *pm_sw = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(pm_sw), build_pm_table_tab());
+    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), pm_sw, gtk_label_new("PM Table"));
+
+    /* PBO tab */
+    GtkWidget *pbo_sw = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(pbo_sw), build_pbo_tab());
+    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), pbo_sw, gtk_label_new("PBO / Tuning"));
+
+    /* SMU Command tab */
+    GtkWidget *smu_sw = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(smu_sw), build_smu_cmd_tab(window));
+    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), smu_sw, gtk_label_new("SMU Command"));
+
+    /* SMN tab */
+    GtkWidget *smn_sw = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(smn_sw), build_smn_tab(window));
+    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), smn_sw, gtk_label_new("SMN"));
+
+    /* Log tab */
+    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), build_log_tab(), gtk_label_new("Log"));
+
+    gtk_window_present(GTK_WINDOW(window));
 }
 
 int gui_main(int argc, char **argv)
 {
-    (void)argc;
-    (void)argv;
-    GtkWidget *window, *notebook;
+    /* Strip --gui / -g from argv before passing to GtkApplication (it rejects unknown options). */
+    int new_argc = 0;
+    char **new_argv = g_new(char *, argc + 1);
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "--gui") != 0 && strcmp(argv[i], "-g") != 0)
+            new_argv[new_argc++] = argv[i];
+    }
+    new_argv[new_argc] = NULL;
 
-    gtk_init(&argc, &argv);
-
-    window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_default_size(GTK_WINDOW(window), 900, 600);
-    gtk_window_set_title(GTK_WINDOW(window), "Ryzen SMU Debug Tool");
-    gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
-    g_signal_connect(window, "destroy", G_CALLBACK(window_destroy), NULL);
-
-    notebook = gtk_notebook_new();
-    gtk_container_add(GTK_CONTAINER(window), notebook);
-
-    gtk_notebook_append_page(GTK_NOTEBOOK(notebook),
-                             gtk_scrolled_window_new(NULL, NULL),
-                             gtk_label_new("System Info"));
-    GtkWidget *sys_scroll = gtk_notebook_get_nth_page(GTK_NOTEBOOK(notebook), 0);
-    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sys_scroll), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-    GtkWidget *sys_child = build_system_info_tab();
-    gtk_container_add(GTK_CONTAINER(sys_scroll), sys_child);
-
-    add_tab(notebook, "PM Table", build_pm_table_tab());
-    add_tab(notebook, "PBO / Tuning", build_pbo_tab());
-
-    GtkWidget *smu_grid = build_smu_cmd_tab(window);
-    GtkWidget *smu_sw = gtk_scrolled_window_new(NULL, NULL);
-    gtk_container_add(GTK_CONTAINER(smu_sw), smu_grid);
-    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), smu_sw, gtk_label_new("SMU Command"));
-
-    GtkWidget *smn_grid = build_smn_tab(window);
-    GtkWidget *smn_sw = gtk_scrolled_window_new(NULL, NULL);
-    gtk_container_add(GTK_CONTAINER(smn_sw), smn_grid);
-    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), smn_sw, gtk_label_new("SMN"));
-
-    GtkWidget *log_sw = build_log_tab();
-    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), log_sw, gtk_label_new("Log"));
-
-    gtk_widget_show_all(window);
-    gtk_main();
-    return 0;
+    GtkApplication *app = gtk_application_new("com.ryzen.smudebug", G_APPLICATION_DEFAULT_FLAGS);
+    g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
+    int status = g_application_run(G_APPLICATION(app), new_argc, new_argv);
+    g_object_unref(app);
+    g_free(new_argv);
+    return status;
 }
